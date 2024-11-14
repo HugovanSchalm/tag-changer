@@ -23,3 +23,6 @@ Cargo.lock
 # Added by cargo
 
 /target
+
+# Unreleased music that I am working on is in the test files
+/test_files
