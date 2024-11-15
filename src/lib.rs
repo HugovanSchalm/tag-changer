@@ -4,6 +4,8 @@ use std::io::prelude::*;
 use std::io::Seek;
 use std::io::SeekFrom;
 
+use std::convert::From;
+
 #[derive(Debug)]
 /// Differentiate between IO error and an error in reading the ID3 tags.
 pub enum ReadError {
@@ -25,15 +27,40 @@ impl From<std::io::Error> for ReadError {
     }
 }
 
+#[allow(non_camel_case_types)]
+#[derive(Debug)]
+/// The encoding of ID3v1 text is base on
+/// ISO 8859-1 (https://www.wikipedia.org/wiki/ISO_8859-1)
+struct ISO_8859_1(String);
+
+impl From<&[u8]> for ISO_8859_1 {
+    fn from(value: &[u8]) -> Self {
+        // https://stackoverflow.com/questions/28169745/what-are-the-options-to-convert-iso-8859-1-latin-1-to-a-string-utf-8
+        ISO_8859_1(value.iter().map(|&c| c as char).collect())
+    }
+}
+
+impl From<&str> for ISO_8859_1 {
+    fn from(value: &str) -> Self {
+        ISO_8859_1(String::from(value))
+    }
+}
+
+impl std::fmt::Display for ISO_8859_1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug)]
 /// Represents ID3v1 tags
 /// Based on: https://id3.org/ID3v1
 pub struct ID3v1 {
-    title: String,
-    artist: String,
-    album: String,
-    year: String,
-    comment: String,
+    title: ISO_8859_1,
+    artist: ISO_8859_1,
+    album: ISO_8859_1,
+    year: ISO_8859_1,
+    comment: ISO_8859_1,
     genre: u8,
 }
 
@@ -59,49 +86,102 @@ Genre: {}\
     }
 }
 
+impl TryFrom<Vec<u8>> for ID3v1 {
+    type Error = ReadError;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, ReadError> {
+        if value.len() != 128 {
+            return Err(ReadError::ID3);
+        }
+
+        let ISO_8859_1(tag) = ISO_8859_1::from(&value[0..=2]);
+        if tag != "TAG" {
+            return Err(ReadError::ID3);
+        }
+
+        let title = ISO_8859_1::from(&value[3..=32]);
+        let artist = ISO_8859_1::from(&value[33..=62]);
+        let album = ISO_8859_1::from(&value[63..=92]);
+        let year = ISO_8859_1::from(&value[93..=96]);
+        let comment = ISO_8859_1::from(&value[97..=126]);
+        let genre = value[127];
+
+        Ok(
+            ID3v1 {
+                title,
+                artist,
+                album,
+                year,
+                comment,
+                genre
+            }
+        )
+    }
+}
+
+impl From<ID3v1> for Vec<u8> {
+    fn from(tags: ID3v1) -> Self {
+        let mut result = Vec::with_capacity(128);
+        for &c in b"TAG" {
+            result.push(c);
+        }
+
+        let text_fields = [
+            (tags.title, 30), 
+            (tags.artist, 30),
+            (tags.album, 30), 
+            (tags.year, 4),
+            (tags.comment, 30)
+        ];
+
+        for field in text_fields {
+            println!("{}", field.0.0);
+            for c in field.0.0.bytes() {
+                println!("{}", c);
+                result.push(c);
+            }
+
+            for _ in field.0.0.len()..field.1 {
+                result.push(0)
+            }
+        }
+
+        result.push(tags.genre);
+
+        result
+    }
+}
+
 impl ID3v1 {
     /// Creates ID3V1 struct from a readable source
     pub fn read<T: Seek + Read>(source: &mut T) -> Result<ID3v1, ReadError> {
         source.seek(SeekFrom::End(-128))?;
 
-        let mut tag = [0; 3];
-        source.read_exact(&mut tag)?;
-        if &tag != b"TAG" {
-            return Err(ReadError::ID3);
-        }
+        let mut buff = vec!(0; 128);
+        // https://users.rust-lang.org/t/read-until-buffer-is-full-or-eof/90184
+        source.take(128).read_to_end(&mut buff)?;
 
-        let title = ID3v1::get_field_string(30, source)?;
-        let artist = ID3v1::get_field_string(30, source)?;
-        let album = ID3v1::get_field_string(30, source)?;
-        let year = ID3v1::get_field_string(4, source)?;
-        let comment = ID3v1::get_field_string(30, source)?;
-
-        let genre = match source.bytes().next() {
-            Some(res) => res?,
-            None => return Err(ReadError::ID3),
-        };
-
-        Ok(ID3v1 {
-            title,
-            artist,
-            album,
-            year,
-            comment,
-            genre,
-        })
+        ID3v1::try_from(buff)
     }
 
-    /// Converts an ID3V1 field into a String
-    fn get_field_string<T: Seek + Read>(
-        field_length: usize,
-        source: &mut T,
-    ) -> std::io::Result<String> {
-        let mut buff = Vec::with_capacity(field_length);
-        // https://users.rust-lang.org/t/read-until-buffer-is-full-or-eof/90184
-        source.take(field_length as u64).read_to_end(&mut buff)?;
-        // https://stackoverflow.com/questions/28169745/what-are-the-options-to-convert-iso-8859-1-latin-1-to-a-string-utf-8
-        let field = buff.iter().map(|&c| c as char).collect();
-        Ok(field)
+    fn remove<T: Read + Write + Seek>(from: &mut T) -> Result<(), std::io::Error> {
+        if let Ok(_) = ID3v1::read(from) {
+            let end_position = from.seek(SeekFrom::End(-128)).unwrap();
+            from.seek(SeekFrom::Start(0))?;
+            let mut buff = vec!(0; end_position as usize);
+            from.read_exact(&mut buff)?;
+            from.write_all(&buff)?;
+        }
+
+        Ok(())
+    }
+
+    fn write<T: Read + Write + Seek>(self, destination: &mut T) -> Result<(), std::io::Error>{
+        Self::remove(destination)?;
+        let bytes: Vec<u8> = self.into();
+        destination.seek(SeekFrom::End(0))?;
+        destination.write(&bytes)?;
+        Ok(())
     }
 
     /// Converts a genre byte into a str according to https://en.wikipedia.org/wiki/List_of_ID3v1_genres
@@ -137,5 +217,119 @@ impl ID3v1 {
             28..=191 => todo!("the requested genre was not yet implemented"),
             _ => "Unknown",
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestFile{
+        cursor_position: usize,
+        contents: Vec<u8>
+    }
+
+    impl Read for TestFile {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let amount = (self.contents.len() - self.cursor_position).min(buf.len());
+            for i in 0..amount {
+                buf[i] = self.contents[self.cursor_position];
+                self.cursor_position += 1;
+            }
+            Ok(amount)
+        }
+    }
+
+    impl Write for TestFile {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            for &byte in buf {
+                if self.cursor_position >= self.contents.len() {
+                    self.contents.push(byte);
+                } else {
+                    self.contents[self.cursor_position] = byte;
+                }
+
+                self.cursor_position += 1;
+            }
+            return Ok(buf.len())
+        }
+    
+        fn flush(&mut self) -> std::io::Result<()> {
+            return Ok(())
+        }
+    }
+
+    impl Seek for TestFile {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.cursor_position = match pos {
+                SeekFrom::Current(offset) => {
+                    let result = (self.cursor_position as i64 + offset);
+                    if result < 0 || result as usize >= self.contents.len() {
+                        return Err(std::io::Error::from(std::io::ErrorKind::AddrNotAvailable));
+                    }
+                    result as usize
+                }
+                SeekFrom::Start(offset) => {
+                    if offset as usize >= self.contents.len() {
+                        return Err(std::io::Error::from(std::io::ErrorKind::AddrNotAvailable));
+                    }
+                    offset as usize
+                }
+                SeekFrom::End(offset) => {
+                    let result = self.contents.len() as i64 + offset;
+                    if result < 0 {
+                        return Err(std::io::Error::from(std::io::ErrorKind::AddrNotAvailable));
+                    }
+                    result as usize
+                }
+            };
+            Ok(self.cursor_position as u64)
+        }
+    }
+
+    impl TestFile {
+        fn new() -> Self {
+            TestFile {
+                cursor_position: 0,
+                contents: vec![],
+            }
+        }
+    }
+
+    #[test]
+    fn basic_write() {
+        let mut test_file = TestFile::new();
+        let title = b"testsong";
+        let artist = b"testartist";
+        let album = b"testalbum";
+        let year = b"2024";
+        let comment = b"testcomment";
+
+        let tags = ID3v1 {
+            title: title[0..].into(),
+            artist: artist[0..].into(),
+            album: album[0..].into(),
+            year: year[0..].into(),
+            comment: comment[0..].into(),
+            genre: 5,
+        };
+        println!("{:?}", tags);
+        tags.write(&mut test_file).unwrap();
+
+        println!("{:#?}", test_file.contents);
+        assert_eq!(test_file.contents.len(), 128);
+        assert_eq!(&test_file.contents[0..=2], b"TAG");
+        assert_eq!(test_file.contents[3..3 + title.len()], title[0..]);
+        assert_eq!(test_file.contents[3 + title.len()..=32], vec!(0; 30 - title.len()));
+        assert_eq!(test_file.contents[33..33 + artist.len()], artist[0..]);
+        assert_eq!(test_file.contents[33 + artist.len()..=62], vec!(0; 30 - artist.len()));
+        assert_eq!(test_file.contents[63..63 + album.len()], album[0..]);
+        assert_eq!(test_file.contents[63 + album.len()..=92], vec!(0; 30 - album.len()));
+        assert_eq!(test_file.contents[93..93 + year.len()], year[0..]);
+        assert_eq!(test_file.contents[93 + year.len()..=96], vec!(0; 4 - year.len()));
+        assert_eq!(test_file.contents[97..97 + comment.len()], comment[0..]);
+        assert_eq!(test_file.contents[97 + comment.len()..=126], vec!(0; 30 - comment.len()));
+        assert_eq!(test_file.contents[127], 5);
     }
 }
