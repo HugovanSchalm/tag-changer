@@ -95,6 +95,7 @@ impl TryFrom<Vec<u8>> for ID3v1 {
         }
 
         let ISO_8859_1(tag) = ISO_8859_1::from(&value[0..=2]);
+        println!("{}", tag);
         if tag != "TAG" {
             return Err(ReadError::ID3);
         }
@@ -106,16 +107,14 @@ impl TryFrom<Vec<u8>> for ID3v1 {
         let comment = ISO_8859_1::from(&value[97..=126]);
         let genre = value[127];
 
-        Ok(
-            ID3v1 {
-                title,
-                artist,
-                album,
-                year,
-                comment,
-                genre
-            }
-        )
+        Ok(ID3v1 {
+            title,
+            artist,
+            album,
+            year,
+            comment,
+            genre,
+        })
     }
 }
 
@@ -127,21 +126,21 @@ impl From<ID3v1> for Vec<u8> {
         }
 
         let text_fields = [
-            (tags.title, 30), 
+            (tags.title, 30),
             (tags.artist, 30),
-            (tags.album, 30), 
+            (tags.album, 30),
             (tags.year, 4),
-            (tags.comment, 30)
+            (tags.comment, 30),
         ];
 
         for field in text_fields {
-            println!("{}", field.0.0);
-            for c in field.0.0.bytes() {
+            println!("{}", field.0 .0);
+            for c in field.0 .0.bytes() {
                 println!("{}", c);
                 result.push(c);
             }
 
-            for _ in field.0.0.len()..field.1 {
+            for _ in field.0 .0.len()..field.1 {
                 result.push(0)
             }
         }
@@ -157,30 +156,35 @@ impl ID3v1 {
     pub fn read<T: Seek + Read>(source: &mut T) -> Result<ID3v1, ReadError> {
         source.seek(SeekFrom::End(-128))?;
 
-        let mut buff = vec!(0; 128);
+        let mut buff = vec![0; 128];
         // https://users.rust-lang.org/t/read-until-buffer-is-full-or-eof/90184
-        source.take(128).read_to_end(&mut buff)?;
+        source.read_exact(&mut buff)?;
+
+        println!("{:?}", buff);
 
         ID3v1::try_from(buff)
     }
 
-    fn remove<T: Read + Write + Seek>(from: &mut T) -> Result<(), std::io::Error> {
-        if let Ok(_) = ID3v1::read(from) {
-            let end_position = from.seek(SeekFrom::End(-128)).unwrap();
-            from.seek(SeekFrom::Start(0))?;
-            let mut buff = vec!(0; end_position as usize);
-            from.read_exact(&mut buff)?;
-            from.write_all(&buff)?;
-        }
-
-        Ok(())
+    fn get_contents_without_tag<T: Read + Write + Seek>(from: &mut T) -> Result<Vec<u8>, std::io::Error> {
+        let end_position = if ID3v1::read(from).is_ok() {
+                println!("Has tag");
+                from.seek(SeekFrom::End(-128)).unwrap()
+            } else {
+                println!("Has no tag");
+                from.seek(SeekFrom::End(0)).unwrap()
+            };
+        
+        from.seek(SeekFrom::Start(0))?;
+        let mut buff = vec![0; end_position as usize];
+        from.read_exact(&mut buff)?;
+        Ok(buff)
     }
 
-    fn write<T: Read + Write + Seek>(self, destination: &mut T) -> Result<(), std::io::Error>{
-        Self::remove(destination)?;
-        let bytes: Vec<u8> = self.into();
-        destination.seek(SeekFrom::End(0))?;
-        destination.write(&bytes)?;
+    fn write<T: Read + Write + Seek>(self, destination: &mut T) -> Result<(), std::io::Error> {
+        let mut contents = Self::get_contents_without_tag(destination)?;
+        contents.append(&mut self.into());
+        destination.seek(SeekFrom::Start(0))?;
+        destination.write_all(&contents)?;
         Ok(())
     }
 
@@ -220,14 +224,14 @@ impl ID3v1 {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::prelude::*;
 
-    struct TestFile{
+    struct TestFile {
         cursor_position: usize,
-        contents: Vec<u8>
+        contents: Vec<u8>,
     }
 
     impl Read for TestFile {
@@ -252,11 +256,11 @@ mod tests {
 
                 self.cursor_position += 1;
             }
-            return Ok(buf.len())
+            return Ok(buf.len());
         }
-    
+
         fn flush(&mut self) -> std::io::Result<()> {
-            return Ok(())
+            return Ok(());
         }
     }
 
@@ -264,18 +268,13 @@ mod tests {
         fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
             self.cursor_position = match pos {
                 SeekFrom::Current(offset) => {
-                    let result = (self.cursor_position as i64 + offset);
-                    if result < 0 || result as usize >= self.contents.len() {
+                    let result = self.cursor_position as i64 + offset;
+                    if result < 0 {
                         return Err(std::io::Error::from(std::io::ErrorKind::AddrNotAvailable));
                     }
                     result as usize
                 }
-                SeekFrom::Start(offset) => {
-                    if offset as usize >= self.contents.len() {
-                        return Err(std::io::Error::from(std::io::ErrorKind::AddrNotAvailable));
-                    }
-                    offset as usize
-                }
+                SeekFrom::Start(offset) => offset as usize,
                 SeekFrom::End(offset) => {
                     let result = self.contents.len() as i64 + offset;
                     if result < 0 {
@@ -321,15 +320,77 @@ mod tests {
         assert_eq!(test_file.contents.len(), 128);
         assert_eq!(&test_file.contents[0..=2], b"TAG");
         assert_eq!(test_file.contents[3..3 + title.len()], title[0..]);
-        assert_eq!(test_file.contents[3 + title.len()..=32], vec!(0; 30 - title.len()));
+        assert_eq!(
+            test_file.contents[3 + title.len()..=32],
+            vec!(0; 30 - title.len())
+        );
         assert_eq!(test_file.contents[33..33 + artist.len()], artist[0..]);
-        assert_eq!(test_file.contents[33 + artist.len()..=62], vec!(0; 30 - artist.len()));
+        assert_eq!(
+            test_file.contents[33 + artist.len()..=62],
+            vec!(0; 30 - artist.len())
+        );
         assert_eq!(test_file.contents[63..63 + album.len()], album[0..]);
-        assert_eq!(test_file.contents[63 + album.len()..=92], vec!(0; 30 - album.len()));
+        assert_eq!(
+            test_file.contents[63 + album.len()..=92],
+            vec!(0; 30 - album.len())
+        );
         assert_eq!(test_file.contents[93..93 + year.len()], year[0..]);
-        assert_eq!(test_file.contents[93 + year.len()..=96], vec!(0; 4 - year.len()));
+        assert_eq!(
+            test_file.contents[93 + year.len()..=96],
+            vec!(0; 4 - year.len())
+        );
         assert_eq!(test_file.contents[97..97 + comment.len()], comment[0..]);
-        assert_eq!(test_file.contents[97 + comment.len()..=126], vec!(0; 30 - comment.len()));
+        assert_eq!(
+            test_file.contents[97 + comment.len()..=126],
+            vec!(0; 30 - comment.len())
+        );
         assert_eq!(test_file.contents[127], 5);
+    }
+
+    #[test]
+    fn get_contents_too_short() {
+        let mut test_file = TestFile {
+            cursor_position: 0,
+            contents: vec![1; 20],
+        };
+
+        ID3v1::get_contents_without_tag(&mut test_file).unwrap();
+        assert_eq!(test_file.contents, vec![1; 20]);
+    }
+
+    #[test]
+    fn get_contents_no_tag() {
+        let mut test_file = TestFile {
+            cursor_position: 0,
+            contents: vec![1; 300],
+        };
+
+        ID3v1::get_contents_without_tag(&mut test_file).unwrap();
+        assert_eq!(test_file.contents, vec![1; 300]);
+    }
+
+    #[test]
+    fn get_contents() {
+        let mut rng = rand::thread_rng();
+
+        let mut test_file = TestFile {
+            cursor_position: 0,
+            contents: Vec::with_capacity(130),
+        };
+
+        test_file.contents.push(1);
+        test_file.contents.push(2);
+        test_file.contents.push(b'T');
+        test_file.contents.push(b'A');
+        test_file.contents.push(b'G');
+        for _ in 0..125 {
+            test_file.contents.push(rng.gen());
+        }
+
+        println!("{}", test_file.contents.len());
+
+        let contents = ID3v1::get_contents_without_tag(&mut test_file).unwrap();
+
+        assert_eq!(contents, vec![1, 2]);
     }
 }
