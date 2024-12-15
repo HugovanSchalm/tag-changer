@@ -152,6 +152,20 @@ impl From<ID3v1> for Vec<u8> {
 }
 
 impl ID3v1 {
+    pub fn default() -> Self {
+        ID3v1 {
+            title: ISO_8859_1(String::new()),
+            album: ISO_8859_1(String::new()),
+            artist: ISO_8859_1(String::new()),
+            year: ISO_8859_1(String::new()),
+            comment: ISO_8859_1(String::new()),
+            genre: 0,
+        }
+    }
+
+    pub fn set_title(&mut self, title: &String) {
+        self.title = ISO_8859_1(String::from(title));
+    }
     /// Creates ID3V1 struct from a readable source
     pub fn read<T: Seek + Read>(source: &mut T) -> Result<ID3v1, ReadError> {
         source.seek(SeekFrom::End(-128))?;
@@ -180,7 +194,7 @@ impl ID3v1 {
         Ok(buff)
     }
 
-    fn write<T: Read + Write + Seek>(self, destination: &mut T) -> Result<(), std::io::Error> {
+    pub fn write<T: Read + Write + Seek>(self, destination: &mut T) -> Result<(), std::io::Error> {
         let mut contents = Self::get_contents_without_tag(destination)?;
         contents.append(&mut self.into());
         destination.seek(SeekFrom::Start(0))?;
