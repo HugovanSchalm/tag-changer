@@ -174,7 +174,6 @@ impl ID3v1 {
         // https://users.rust-lang.org/t/read-until-buffer-is-full-or-eof/90184
         source.read_exact(&mut buff)?;
 
-        println!("{:?}", buff);
 
         ID3v1::try_from(buff)
     }

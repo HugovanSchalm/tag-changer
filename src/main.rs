@@ -1,4 +1,4 @@
-use clap::{Arg, Command, Subcommand};
+use clap::{Arg, Command};
 use std::{fs::File, path::PathBuf};
 
 use tag_changer::{ID3v1, ReadError};
@@ -35,7 +35,10 @@ fn main() {
     match matches.subcommand(){
         Some(("view", viewmatches)) => {
             let filestring: &String = viewmatches.get_one("file").unwrap();
-            let mut file = open_file(filestring).unwrap();
+            let filepath = PathBuf::from(filestring);
+            let mut file = File::options()
+                .read(true)
+                .open(filepath).unwrap();
             let tags = match ID3v1::read(&mut file) {
                 Ok(tags) => tags,
                 Err(ReadError::ID3) => panic!("Could not parse tags of file {}", filestring),
@@ -46,7 +49,11 @@ fn main() {
         }
         Some(("edit", editmatches)) => {
             let filestring: &String = editmatches.get_one("file").unwrap();
-            let mut file = open_file(filestring).unwrap();
+            let filepath = PathBuf::from(filestring);
+            let mut file = File::options()
+                .write(true)
+                .read(true)
+                .open(filepath).unwrap();
             let mut tag = ID3v1::default();
             if let Some(title) = editmatches.get_one::<String>("title"){
                 tag.set_title(title);
@@ -55,12 +62,4 @@ fn main() {
         }
         _ => unreachable!("This subcommand should not exist"),
     }  
-}
-
-fn open_file(filestring: &String) -> std::io::Result<File>{
-    let filepath = PathBuf::from(filestring);
-    File::options()
-        .write(true)
-        .read(true)
-        .open(filepath)
 }
