@@ -6,6 +6,47 @@ use std::io::SeekFrom;
 
 use std::convert::From;
 
+pub enum FieldTypes<'a> {
+    String(&'a String),
+    Byte(&'a u8),
+    #[allow(non_camel_case_types)]
+    ISO_8859_1(&'a ISO_8859_1),
+}
+
+impl <'a> std::fmt::Display for FieldTypes<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FieldTypes::String(value) => write!(f, "{}", value),
+            FieldTypes::Byte(value) => write!(f, "{}", value),
+            FieldTypes::ISO_8859_1(value) => write!(f, "{}", value),
+        }
+    }
+}
+
+pub struct Field<'a> {
+    name: &'static str,
+    value: FieldTypes<'a>,
+}
+
+impl<'a> Field<'a> {
+    pub fn new (name: &'static str, value: FieldTypes<'a>) -> Self {
+        Field {
+            name,
+            value
+        }
+    }
+}
+
+impl<'a> std::fmt::Display for Field<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.name, self.value)
+    }
+}
+
+pub trait Tag {
+    fn get_fields(&self) -> Vec<Field>; 
+}
+
 #[derive(Debug)]
 /// Differentiate between IO error and an error in reading the ID3 tags.
 pub enum ReadError {
@@ -28,10 +69,10 @@ impl From<std::io::Error> for ReadError {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 /// The encoding of ID3v1 text is base on
 /// ISO 8859-1 (https://www.wikipedia.org/wiki/ISO_8859-1)
-struct ISO_8859_1(String);
+pub struct ISO_8859_1(String);
 
 impl From<&[u8]> for ISO_8859_1 {
     fn from(value: &[u8]) -> Self {
@@ -52,7 +93,7 @@ impl std::fmt::Display for ISO_8859_1 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 /// Represents ID3v1 tags
 /// Based on: https://id3.org/ID3v1
 pub struct ID3v1 {
@@ -62,6 +103,37 @@ pub struct ID3v1 {
     year: ISO_8859_1,
     comment: ISO_8859_1,
     genre: u8,
+}
+
+impl Tag for ID3v1 {
+    fn get_fields(&self) -> Vec<Field> {
+        vec![
+            Field::new(
+                "Title",
+                FieldTypes::ISO_8859_1(&self.title),
+            ),
+            Field::new(
+                "Artist",
+                FieldTypes::ISO_8859_1(&self.artist),
+            ),
+            Field::new(
+                "Album",
+                FieldTypes::ISO_8859_1(&self.album),
+            ),
+            Field::new(
+                "Year",
+                FieldTypes::ISO_8859_1(&self.year),
+            ),
+            Field::new(
+                "Comment",
+                FieldTypes::ISO_8859_1(&self.comment),
+            ),
+            Field::new(
+                "Genre",
+                FieldTypes::Byte(&self.genre),
+            ),
+        ]
+    }
 }
 
 impl std::fmt::Display for ID3v1 {
@@ -152,17 +224,6 @@ impl From<ID3v1> for Vec<u8> {
 }
 
 impl ID3v1 {
-    pub fn default() -> Self {
-        ID3v1 {
-            title: ISO_8859_1(String::new()),
-            album: ISO_8859_1(String::new()),
-            artist: ISO_8859_1(String::new()),
-            year: ISO_8859_1(String::new()),
-            comment: ISO_8859_1(String::new()),
-            genre: 0,
-        }
-    }
-
     pub fn set_title(&mut self, title: &String) {
         self.title = ISO_8859_1(String::from(title));
     }
